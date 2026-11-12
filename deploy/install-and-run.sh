@@ -13,9 +13,10 @@ if ! command -v docker >/dev/null; then
 fi
 
 # Oracle's Ubuntu images ship an iptables ruleset that drops 80/443; open them.
-if command -v iptables >/dev/null; then
-  sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
-  sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+# Other providers (Hetzner, GCP) have an empty INPUT chain, so this is best-effort.
+if command -v iptables >/dev/null && sudo iptables -C INPUT -j REJECT --reject-with icmp-host-prohibited 2>/dev/null; then
+  sudo iptables -I INPUT 1 -m state --state NEW -p tcp --dport 80 -j ACCEPT || true
+  sudo iptables -I INPUT 1 -m state --state NEW -p tcp --dport 443 -j ACCEPT || true
   sudo netfilter-persistent save 2>/dev/null || true
 fi
 
