@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (typecheck, unit, integration)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: competitorpulse
+          POSTGRES_PASSWORD: competitorpulse
+          POSTGRES_DB: competitorpulse
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U competitorpulse"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:integration
+        env:
+          TEST_DATABASE_URL: postgres://competitorpulse:competitorpulse@localhost:5432/competitorpulse
+
+  frontend:
+    name: Frontend (typecheck, lint, tests, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  compose:
+    name: docker compose builds and starts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose build
+      - run: docker compose up -d
+      - name: wait for the backend to be healthy
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:4000/api/health && exit 0
+            sleep 2
+          done
+          docker compose logs backend
+          exit 1
+      - name: smoke test the API contract
+        run: |
+          set -e
+          curl -sf -X POST -H 'content-type: application/json' -d '{"id":"acme-crm"}' http://localhost:4000/api/competitors
+          curl -sf http://localhost:4000/api/competitors | grep -q acme-crm
+          curl -sf http://localhost:4000/api/competitors/acme-crm/snapshots
+          curl -sf -o /dev/null -w '%{http_code}' -X DELETE http://localhost:4000/api/competitors/acme-crm | grep -q 204
+      - if: always()
+        run: docker compose down -v

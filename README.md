@@ -1,5 +1,7 @@
 # CompetitorPulse
 
+[![CI](https://github.com/PriftiAndi/competitorpulse/actions/workflows/ci.yml/badge.svg)](https://github.com/PriftiAndi/competitorpulse/actions/workflows/ci.yml)
+
 Tracks competitor product listings over time, decides which changes matter to a
 product manager, and asks an LLM to explain those changes in plain English.
 
@@ -73,8 +75,28 @@ as does Ollama (`http://host.docker.internal:11434/v1`, `llama3.2`). No code cha
 docker compose up postgres listing-source mock-llm      # or run the vendored servers directly
 cd backend && npm install && npm run db:migrate && npm run dev   # API on :4000, migrates on start too
 cd frontend && npm install && npm run dev                        # UI on :5173, proxies /api to :4000
-cd backend && npm test                                           # unit tests (normalisation + diffing)
+cd backend && npm test                                           # unit tests
+cd backend && npm run test:integration                           # against the compose Postgres (creates competitorpulse_test)
+cd frontend && npm test                                          # component tests (React Testing Library, jsdom)
 ```
+
+### Tests
+
+- **Backend unit** (`backend/src/**/*.test.ts`): normalisation and price parsing, diffing and carry-forward, rule
+  summaries, adaptive interval maths, budget pacing maths, the source HTTP client (404/429/5xx/timeout/non-JSON),
+  the LLM client (usable vs. unusable answers, retryable vs. non-retryable errors), config validation, the rate
+  limiter and semaphore, DTO reasons.
+- **Backend integration** (`backend/src/integration/*.itest.ts`, real Postgres): `recordPoll` end to end (first
+  observation, noise, price rule, LLM queueing, partial carry-forward, failed polls, delist/relist, removed
+  competitors), the two `SKIP LOCKED` claim queries (adaptive rescheduling, disjoint concurrent claims, priority
+  order, leases), the atomic budget counter under 40 concurrent reservations plus hourly pacing and day rollover,
+  the summary worker's every outcome with a fake LLM, and the HTTP contract through Fastify's inject.
+- **Frontend** (`frontend/src/**/*.test.tsx`): the list page (empty state, rows, stats, add with validation and
+  server errors, remove with confirmation), the timeline (every summary state, diffs, partial fields, collapsed
+  runs, untracked id, poll now), the status chips, the confirm dialog, the SSE hook's targeted invalidation, the
+  HTTP client, and the pure helpers.
+- **CI** (`.github/workflows/ci.yml`) runs all of the above on every push plus a `docker compose up` smoke test
+  of the API contract on a clean runner.
 
 Migrations live in `backend/drizzle/` and are generated with `npm run db:generate` after editing
 `backend/src/db/schema.ts`. The backend applies pending migrations on startup, so `docker compose up` is the one command.
@@ -209,20 +231,23 @@ day-old summary of a price change is not what a PM wants, and the diff is alread
 
 ### The production numbers
 
-- **Polling:** 6,000 competitors / 15 min = 6.7 req/s, above the 5 req/s limit before counting retries. Options,
-  in the order I would try them: (1) ask for the interval to become 25 min (6,000 / 5 req/s = 20 min at 100%
-  utilisation; 25 min leaves room for retries); (2) tiered intervals, e.g. the top 1,000 competitors every
-  15 min and the rest every 30-60 min, driven by how often each has changed historically; (3) adaptive
-  backoff per competitor: one that has not changed in a week is polled less often. (4) If the source offered
-  conditional requests (ETag) the budget problem would mostly disappear; it does not, so this is a conversation
-  with the source owner. The scheduler already supports (2) and (3) with one extra column (`interval_seconds`
-  per competitor); only the policy is missing.
+- **Polling:** 6,000 competitors / 15 min = 6.7 req/s, above the 5 req/s limit before counting retries, and
+  6,000 / 5 req/s = 20 min is the physical floor for a full sweep. What is implemented: **adaptive intervals**.
+  With `POLL_INTERVAL_SECONDS=900`, `POLL_MAX_INTERVAL_SECONDS=3600` and `POLL_BACKOFF_EVERY=10`, a competitor
+  that has not changed for 10 polls (2.5 h) is polled every 30 min, after 20 polls every hour, and any change
+  puts it straight back to 15 min. Since most listings change a few times a year, the steady state is close to
+  6,000 / 3,600 s = 1.7 req/s, with headroom for the ones that are changing. What I would do on top, in order:
+  (1) tell the PM honestly that "every competitor every 15 min" cannot be promised at 5 req/s and agree on
+  "within 15 min of a change for active competitors, within an hour for dormant ones"; (2) explicit tiers
+  (a per-competitor minimum interval) for the competitors the business says matter most; (3) ask the source
+  owner for conditional requests (ETag / If-Modified-Since) or a change feed, which would remove the problem.
 - **LLM cap:** 576,000 polls/day. If even 0.5% of polls are real changes that is 2,880 calls, over the cap.
-  Mitigations already in place: rule-based summaries for availability changes, no call for first snapshots, the
-  structured diff as a fallback. Next: templated summaries for single-field price changes
-  ("Price changed from $39/mo to $29/mo" needs no model), coalescing several changes of the same competitor
-  within an hour into one call, and pacing the budget across the day (e.g. at most cap/24 per hour) so a burst at
-  09:00 does not leave the afternoon with nothing. Priority ordering (price before copy) if the cap is still hit.
+  Implemented: templated summaries for price-only changes and availability changes (no model needed, and
+  price-only is the most common change), no call for first snapshots, hourly pacing of the cap with rollover so a
+  morning burst cannot drain the afternoon, every attempt charged, and the structured diff always shown so a
+  missing summary never hides what changed. The pending queue is claimed in priority order: price and availability
+  changes before copy-only changes, oldest first within a tier, so a tight budget goes to the changes a PM acts on.
+  Next, if the cap is still hit: coalescing several changes of the same competitor within an hour into one call.
 - **Storage:** 576,000 rows/day x 90 days = 52 M rows, roughly 25-30 GB with the text columns. Fine for Postgres,
   but I would partition by day (retention = drop partition, no delete churn) and dedupe listing text into a
   versions table so unchanged polls are ~50 bytes.

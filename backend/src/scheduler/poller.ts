@@ -5,7 +5,7 @@ import type { Db } from "../db/client.js";
 import type { EventBus } from "../events.js";
 import { recordPoll } from "../domain/snapshots.js";
 import type { SourceClient } from "../source/client.js";
-import { intervalSql } from "./interval.js";
+import { claimDueCompetitors } from "./claim.js";
 import { RateLimiter, Semaphore, sleep } from "./rateLimiter.js";
 
 export type PollerStats = {
@@ -47,21 +47,6 @@ export function startPoller(deps: {
   let polls = 0;
   let lastTickAt: Date | null = null;
 
-  async function claimDue(limit: number): Promise<string[]> {
-    const result = await db.execute<{ id: string }>(sql`
-      update competitors
-      set next_poll_at = now() + make_interval(secs => ${intervalSql(config)})
-      where id in (
-        select id from competitors
-        where removed_at is null and next_poll_at <= now()
-        order by next_poll_at
-        limit ${limit}
-        for update skip locked
-      )
-      returning id`);
-    return result.rows.map((r) => r.id);
-  }
-
   async function pollOne(id: string): Promise<void> {
     const fetchedAt = new Date();
     const outcome = await source.fetchListing(id);
@@ -97,7 +82,7 @@ export function startPoller(deps: {
           await sleep(Math.min(TICK_MS, limiter.pausedUntilMs - Date.now()));
           continue;
         }
-        const ids = await claimDue(config.POLL_BATCH_SIZE);
+        const ids = await claimDueCompetitors(db, config, config.POLL_BATCH_SIZE);
         for (const id of ids) {
           if (!running) break;
           const release = await semaphore.acquire();

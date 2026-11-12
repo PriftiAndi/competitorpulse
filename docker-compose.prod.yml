@@ -19,6 +19,7 @@ services:
 
   postgres:
     restart: unless-stopped
+    ports: !reset []
 
   listing-source:
     restart: unless-stopped

@@ -13,6 +13,8 @@ services:
       POSTGRES_DB: competitorpulse
     volumes:
       - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432" # exposed for local tooling and the integration tests
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U competitorpulse -d competitorpulse"]
       interval: 5s
