@@ -10,6 +10,9 @@ product manager, and asks an LLM to explain those changes in plain English.
 - **LLM:** any OpenAI Chat Completions compatible endpoint. Developed and demoed against **Groq** (free tier,
   model `openai/gpt-oss-120b`); the provided mock LLM is the compose default so the system runs with no key.
 - **Runs with one command:** `docker compose up --build`.
+- **Tests and CI:** 47 backend unit tests, 28 integration tests on a real Postgres, 24 React component tests.
+  GitHub Actions runs all of them on every push, plus a `docker compose up` smoke test of the API contract on a
+  clean runner (see [Tests](#tests)).
 
 ## Running locally
 
