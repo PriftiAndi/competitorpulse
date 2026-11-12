@@ -1,0 +1,67 @@
+# One command brings up the whole system: `docker compose up --build`
+# UI on http://localhost:8080, API on http://localhost:4000.
+# Swap the provided source / mock LLM for your own by changing SOURCE_BASE_URL /
+# LLM_BASE_URL in .env (see .env.example); the vendored containers can then be
+# left unused or removed from this file.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: competitorpulse
+      POSTGRES_PASSWORD: competitorpulse
+      POSTGRES_DB: competitorpulse
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U competitorpulse -d competitorpulse"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  listing-source:
+    build: ./vendor/listing-source
+    environment:
+      PORT: 4002
+      SEED: ${SOURCE_SEED:-}
+    ports:
+      - "4002:4002" # exposed so you can use its /control endpoints while testing
+
+  mock-llm:
+    build: ./vendor/mock-llm
+    environment:
+      PORT: 4001
+    ports:
+      - "4001:4001" # exposed for /control/stats and /control/configure
+
+  backend:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      DATABASE_URL: postgres://competitorpulse:competitorpulse@postgres:5432/competitorpulse
+      SOURCE_BASE_URL: ${SOURCE_BASE_URL:-http://listing-source:4002}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://mock-llm:4001/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-mock-key}
+      LLM_MODEL: ${LLM_MODEL:-mock-llm}
+      LLM_DAILY_CAP: ${LLM_DAILY_CAP:-2000}
+      LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-15000}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
+      SOURCE_MAX_RPS: ${SOURCE_MAX_RPS:-4}
+      SOURCE_TIMEOUT_MS: ${SOURCE_TIMEOUT_MS:-10000}
+      RETENTION_DAYS: ${RETENTION_DAYS:-90}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "4000:4000"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:

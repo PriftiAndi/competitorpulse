@@ -1,0 +1,40 @@
+# Production override: `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build`
+# Adds Caddy for automatic HTTPS and stops exposing internal ports on the host.
+# Set DOMAIN in .env (e.g. DOMAIN=pulse.example.com) and point its DNS A record at the VM.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - frontend
+
+  postgres:
+    restart: unless-stopped
+
+  listing-source:
+    restart: unless-stopped
+    ports: !reset []
+
+  mock-llm:
+    restart: unless-stopped
+    ports: !reset []
+
+  backend:
+    restart: unless-stopped
+    ports: !reset []
+
+  frontend:
+    restart: unless-stopped
+    ports: !reset []
+
+volumes:
+  caddy_data:

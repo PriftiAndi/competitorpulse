@@ -1,0 +1,1 @@
+ALTER TABLE "competitors" ADD COLUMN "unchanged_streak" integer DEFAULT 0 NOT NULL;
