@@ -244,22 +244,32 @@ day-old summary of a price change is not what a PM wants, and the diff is alread
 
 ## Deployment
 
-The whole stack runs on one Docker-capable VM with the same compose file plus a production override that adds
-Caddy for HTTPS and stops exposing internal ports. The target is an **Oracle Cloud Always Free** Ampere A1
-(arm64) instance; all base images are multi-arch and the images are built on the VM, so nothing changes for arm64.
+Live instance: **https://95-216-200-79.sslip.io** (a Hetzner CPX12 in Helsinki; up for the duration of the
+interview process).
+
+The whole stack runs on one Docker-capable VM with the same compose file as local plus a production override that
+adds Caddy for automatic HTTPS and stops exposing internal ports. The hostname uses sslip.io, a public DNS service
+that resolves `<ip-with-dashes>.sslip.io` to that IP, so no domain registration was needed for a valid certificate.
 
 ```bash
-# on a fresh Ubuntu VM with ports 80/443 open in the cloud firewall:
-DOMAIN=pulse.example.com REPO=https://github.com/<you>/competitorpulse.git bash deploy/install-and-run.sh
+# on a fresh Ubuntu 24.04 VM with ports 80/443 reachable:
+DOMAIN=95-216-200-79.sslip.io REPO=https://github.com/PriftiAndi/competitorpulse.git bash deploy/install-and-run.sh
 ```
 
-The script installs Docker, opens 80/443 in the OS firewall (Oracle's images block them by default), clones the
-repo into `/opt/competitorpulse`, writes `DOMAIN` into `.env`, and runs
-`docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build`. Caddy obtains the certificate from
-Let's Encrypt on first request. Postgres data lives in a named volume; a managed Postgres would be the first
-change for a real deployment.
+The script installs Docker, opens 80/443 in the OS firewall where the image ships a restrictive ruleset
+(Oracle; a no-op on Hetzner and GCP), clones the repo into `/opt/competitorpulse`, writes `DOMAIN` into `.env`,
+and runs `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build`. Caddy obtains the
+certificate from Let's Encrypt on the first request. The server's `.env` also carries the Groq settings so the live
+instance produces real summaries; the poll interval there is 120 s to stay well inside Groq's free quota.
 
-Live instance: _link added here once deployed_.
+Updating the live instance is `git pull` and the same compose command. Postgres data lives in a named volume; a
+managed Postgres would be the first change for a real deployment, followed by splitting the poller and summary
+worker from the API (`SCHEDULER_ENABLED`) so they can scale independently.
+
+Alternatives considered: Oracle Cloud Always Free (rejected by its fraud filter at signup), Google Cloud (needs a
+billing account even for free-tier VMs), and serverless platforms such as Vercel, which do not fit an always-on
+poller with an in-process rate limiter and an SSE stream without re-architecting the scheduler around cron, queues
+and an external cache.
 
 ## AI tools used
 
